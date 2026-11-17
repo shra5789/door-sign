@@ -107,14 +107,14 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 
-// Defaults match the common ESP32 BLE_server example. Change in settings if yours differ.
+// Defaults match the ESP32_LCD_Remote (Nordic UART Service: 6E400002 is the write/RX characteristic).
 const DEFAULTS = {
-  svc: "4fafc201-1fb5-459e-8fcc-c5c9c331914b",
-  chr: "beb5483e-36e1-4688-b7f5-ea07361b26a8",
-  namePrefix: "",
+  svc: "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+  chr: "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+  namePrefix: "ESP32_LCD",
 };
 for (const k of Object.keys(DEFAULTS)) {
-  $(k).value = store.get(k, DEFAULTS[k]);
+  $(k).value = store.get(k, "") || DEFAULTS[k];
   $(k).addEventListener("change", () => store.set(k, $(k).value.trim()));
 }
 
