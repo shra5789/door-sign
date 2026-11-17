@@ -52,6 +52,9 @@
   .hint { font-size: 13px; color: var(--muted); margin-top: 10px; }
   .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); background: #2a2e39; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100% - 32px); }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  details + details { margin-top: 12px; }
+  #log { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap; max-height: 260px; overflow-y: auto; margin: 10px 0; }
+  #log:empty::before { content: "Nothing yet."; }
   .unsupported { background: #3a2a14; border: 1px solid var(--warn); border-radius: 14px; padding: 14px 16px; margin-bottom: 20px; font-size: 14px; display: none; }
 </style>
 </head>
@@ -97,6 +100,12 @@
     <input type="text" id="namePrefix" spellcheck="false" autocapitalize="off">
     <p class="hint">Copy these from LightBlue: open your ESP32 there and note the service and the characteristic you write to.</p>
   </details>
+
+  <details>
+    <summary>Connection log</summary>
+    <pre id="log"></pre>
+    <button class="chip" id="copyLog" type="button">Copy log</button>
+  </details>
 </main>
 <div class="toast" id="toast"></div>
 
@@ -119,7 +128,17 @@ for (const k of Object.keys(DEFAULTS)) {
 }
 
 let device = null, characteristic = null, manualDisconnect = false;
+let connecting = false, reconnecting = false, connectedAt = 0, quickDrops = 0;
+const listenedDevices = new WeakSet(); // so we never attach the disconnect handler twice
 const enc = new TextEncoder();
+
+function log(msg) {
+  const t = new Date().toLocaleTimeString([], { hour12: false });
+  const line = `${t}  ${msg}`;
+  console.log(line);
+  const el = $("log");
+  el.textContent = (line + "\n" + el.textContent).split("\n").slice(0, 80).join("\n");
+}
 
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
@@ -132,7 +151,7 @@ function setStatus(state, text) {
   const on = state === "on";
   $("connectBtn").textContent = on ? "Disconnect" : state === "busy" ? "Connecting…" : "Connect to door";
   $("connectBtn").classList.toggle("on", on);
-  document.querySelectorAll(".preset, .send, .chip").forEach((b) => (b.disabled = !on));
+  document.querySelectorAll(".preset, .send, #recent .chip").forEach((b) => (b.disabled = !on));
 }
 
 function normUuid(s) {
@@ -150,35 +169,84 @@ async function connect() {
   try {
     setStatus("busy", "Choosing…");
     device = await navigator.bluetooth.requestDevice(opts);
-    device.addEventListener("gattserverdisconnected", onDisconnected);
+    log(`Picked "${device.name || "unnamed device"}"`);
+    if (!listenedDevices.has(device)) {
+      device.addEventListener("gattserverdisconnected", onDisconnected);
+      listenedDevices.add(device);
+    }
+    manualDisconnect = false; quickDrops = 0;
     await openGatt(svc, chr);
   } catch (e) {
     setStatus("off", "Disconnected");
-    if (e.name !== "NotFoundError") toast(e.message || String(e)); // NotFoundError = user cancelled picker
+    if (e.name === "NotFoundError" && /cancel/i.test(e.message)) return; // user closed the picker
+    log(`Connect failed: ${e.name}: ${e.message}`);
+    toast(e.message || String(e));
   }
 }
 
 async function openGatt(svc = normUuid($("svc").value), chr = normUuid($("chr").value)) {
-  setStatus("busy", "Connecting…");
-  const server = await device.gatt.connect();
-  const service = await server.getPrimaryService(svc);
-  characteristic = await service.getCharacteristic(chr);
-  manualDisconnect = false;
-  setStatus("on", device.name || "Connected");
-  toast("Connected");
+  if (connecting) throw new Error("Already connecting");
+  connecting = true;
+  try {
+    setStatus("busy", "Connecting…");
+    const server = await device.gatt.connect();
+    log("Bluetooth link up");
+    const service = await server.getPrimaryService(svc);
+    characteristic = await service.getCharacteristic(chr);
+    const p = characteristic.properties;
+    log(`Ready (write=${p.write}, writeWithoutResponse=${p.writeWithoutResponse})`);
+    connectedAt = Date.now();
+    setStatus("on", device.name || "Connected");
+  } catch (e) {
+    // Don't leave a half-open link behind (connected, but service/characteristic missing)
+    if (device && device.gatt.connected) { try { device.gatt.disconnect(); } catch {} }
+    throw e;
+  } finally {
+    connecting = false;
+  }
 }
 
 async function onDisconnected() {
-  characteristic = null;
+  const upFor = connectedAt ? (Date.now() - connectedAt) / 1000 : 0;
+  connectedAt = 0; characteristic = null;
+  log(`Disconnected${upFor ? ` after ${upFor.toFixed(1)}s` : ""}${document.hidden ? " (app in background)" : ""}`);
+  if (connecting || reconnecting) return; // the attempt in progress handles it
   if (manualDisconnect || !device) { setStatus("off", "Disconnected"); return; }
-  // Try to reconnect a few times (e.g. ESP32 reset or briefly out of range)
-  for (let i = 1; i <= 3; i++) {
-    setStatus("busy", `Reconnecting (${i}/3)…`);
-    try { await new Promise((r) => setTimeout(r, 1000 * i)); await openGatt(); return; } catch {}
+  if (document.hidden) { setStatus("off", "Disconnected"); return; } // reconnect when you come back
+
+  // Stop the connect/disconnect loop if the door keeps dropping us right away
+  quickDrops = upFor < 15 ? quickDrops + 1 : 0;
+  if (quickDrops >= 3) {
+    log("Stopped auto-reconnect: dropped 3 times in a row within 15s");
+    setStatus("off", "Disconnected");
+    toast("The door keeps dropping the connection. Check the log below.");
+    return;
   }
-  setStatus("off", "Disconnected");
-  toast("Lost connection to door");
+
+  reconnecting = true;
+  try {
+    for (let i = 1; i <= 3; i++) {
+      if (manualDisconnect) break;
+      setStatus("busy", `Reconnecting (${i}/3)…`);
+      await new Promise((r) => setTimeout(r, 1000 * i));
+      if (manualDisconnect) break;
+      try { await openGatt(); return; } catch (e) { log(`Reconnect ${i} failed: ${e.message}`); }
+    }
+    setStatus("off", "Disconnected");
+    if (!manualDisconnect) toast("Lost connection to door");
+  } finally {
+    reconnecting = false;
+  }
 }
+
+// iOS cuts Bluetooth when the app is backgrounded; reconnect quietly when you come back
+document.addEventListener("visibilitychange", () => {
+  log(document.hidden ? "App went to background" : "App back in foreground");
+  if (!document.hidden && device && !device.gatt.connected && !manualDisconnect && !connecting && !reconnecting) {
+    quickDrops = 0;
+    openGatt().catch((e) => { log(`Reconnect failed: ${e.message}`); setStatus("off", "Disconnected"); });
+  }
+});
 
 async function send(text, label = text) {
   if (!characteristic) { toast("Not connected"); return false; }
@@ -238,8 +306,18 @@ $("customForm").addEventListener("submit", (e) => {
 });
 
 $("connectBtn").addEventListener("click", () => {
-  if (device && device.gatt.connected) { manualDisconnect = true; device.gatt.disconnect(); }
-  else connect();
+  if (device && (device.gatt.connected || connecting || reconnecting)) {
+    // Disconnect, or cancel a connect/reconnect in progress
+    manualDisconnect = true;
+    log("Disconnect tapped");
+    try { device.gatt.disconnect(); } catch {}
+    setStatus("off", "Disconnected");
+  } else connect();
+});
+
+$("copyLog").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("log").textContent); toast("Log copied"); }
+  catch { toast("Couldn't copy. Take a screenshot instead."); }
 });
 
 // Init
