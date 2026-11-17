@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111318">
+<title>Door Sign</title>
+<style>
+  :root {
+    --bg: #111318; --card: #1b1e26; --line: #2a2e39; --text: #eef0f5; --muted: #8a90a0;
+    --accent: #5b8cff; --ok: #3ecf8e; --warn: #f5a623; --bad: #ff5d5d;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 32px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.busy { background: var(--warn); }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+  .connect { width: 100%; padding: 14px; border-radius: 14px; background: var(--accent); color: #fff; font-weight: 600; margin-bottom: 20px; }
+  .connect.on { background: var(--card); border: 1px solid var(--line); color: var(--muted); }
+  .now { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 20px; }
+  .now small { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .now div { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-word; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  .preset { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 12px; text-align: left; min-height: 84px; transition: transform .08s, border-color .15s; }
+  .preset:active { transform: scale(.97); }
+  .preset.active { border-color: var(--accent); background: #1f2740; }
+  .preset .emoji { font-size: 24px; display: block; }
+  .preset .label { font-weight: 600; margin-top: 6px; display: block; }
+  .preset.wide { grid-column: span 2; }
+  .preset:disabled { opacity: .45; }
+  form { display: flex; gap: 8px; margin-bottom: 12px; }
+  input[type=text] { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  .send { padding: 0 18px; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 600; }
+  .send:disabled { opacity: .45; }
+  h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 8px; font-weight: 600; }
+  .recent { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip:disabled { opacity: .45; }
+  details { margin-top: 28px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  details input { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); background: #2a2e39; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100% - 32px); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .unsupported { background: #3a2a14; border: 1px solid var(--warn); border-radius: 14px; padding: 14px 16px; margin-bottom: 20px; font-size: 14px; display: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🚪 Door Sign</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">Disconnected</span></div>
+  </header>
+
+  <div class="unsupported" id="unsupported">
+    This browser can't use Bluetooth. On iPhone, open this page in <b>Bluefy</b> (free on the App Store).
+    On Android/desktop, use Chrome or Edge.
+  </div>
+
+  <button class="connect" id="connectBtn">Connect to door</button>
+
+  <div class="now"><small>Showing on door</small><div id="nowText">—</div></div>
+
+  <div class="grid">
+    <button class="preset" data-cmd="A" data-label="ASLEEP"><span class="emoji">😴</span><span class="label">Asleep</span></button>
+    <button class="preset" data-cmd="B" data-label="Hello"><span class="emoji">👋</span><span class="label">Hello</span></button>
+    <button class="preset" data-cmd="C" data-label="Come In!"><span class="emoji">🚪</span><span class="label">Come In!</span></button>
+    <button class="preset" data-cmd="D" data-label="DO NOT DISTURB"><span class="emoji">⛔</span><span class="label">Do Not Disturb</span></button>
+    <button class="preset wide" data-cmd="E" data-label="🕒 Clock"><span class="emoji">🕒</span><span class="label">Clock (time &amp; date)</span></button>
+  </div>
+
+  <form id="customForm">
+    <input type="text" id="customInput" placeholder="Custom message…" autocomplete="off" enterkeyhint="send">
+    <button class="send" id="sendBtn" type="submit">Send</button>
+  </form>
+
+  <h2>Recent</h2>
+  <div class="recent" id="recent"></div>
+
+  <details>
+    <summary>Bluetooth settings</summary>
+    <label for="svc">Service UUID</label>
+    <input type="text" id="svc" spellcheck="false" autocapitalize="off">
+    <label for="chr">Characteristic UUID (writable)</label>
+    <input type="text" id="chr" spellcheck="false" autocapitalize="off">
+    <label for="namePrefix">Device name starts with (optional, filters the picker)</label>
+    <input type="text" id="namePrefix" spellcheck="false" autocapitalize="off">
+    <p class="hint">Copy these from LightBlue: open your ESP32 there and note the service and the characteristic you write to.</p>
+  </details>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+// Defaults match the common ESP32 BLE_server example. Change in settings if yours differ.
+const DEFAULTS = {
+  svc: "4fafc201-1fb5-459e-8fcc-c5c9c331914b",
+  chr: "beb5483e-36e1-4688-b7f5-ea07361b26a8",
+  namePrefix: "",
+};
+for (const k of Object.keys(DEFAULTS)) {
+  $(k).value = store.get(k, DEFAULTS[k]);
+  $(k).addEventListener("change", () => store.set(k, $(k).value.trim()));
+}
+
+let device = null, characteristic = null, manualDisconnect = false;
+const enc = new TextEncoder();
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+function setStatus(state, text) {
+  $("dot").className = "dot" + (state === "on" ? " on" : state === "busy" ? " busy" : "");
+  $("statusText").textContent = text;
+  const on = state === "on";
+  $("connectBtn").textContent = on ? "Disconnect" : state === "busy" ? "Connecting…" : "Connect to door";
+  $("connectBtn").classList.toggle("on", on);
+  document.querySelectorAll(".preset, .send, .chip").forEach((b) => (b.disabled = !on));
+}
+
+function normUuid(s) {
+  s = s.trim().toLowerCase();
+  if (/^(0x)?[0-9a-f]{4}$/.test(s)) return parseInt(s.replace(/^0x/, ""), 16); // 16-bit short UUID
+  return s;
+}
+
+async function connect() {
+  const svc = normUuid($("svc").value), chr = normUuid($("chr").value);
+  const prefix = $("namePrefix").value.trim();
+  const opts = prefix
+    ? { filters: [{ namePrefix: prefix }], optionalServices: [svc] }
+    : { acceptAllDevices: true, optionalServices: [svc] };
+  try {
+    setStatus("busy", "Choosing…");
+    device = await navigator.bluetooth.requestDevice(opts);
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    await openGatt(svc, chr);
+  } catch (e) {
+    setStatus("off", "Disconnected");
+    if (e.name !== "NotFoundError") toast(e.message || String(e)); // NotFoundError = user cancelled picker
+  }
+}
+
+async function openGatt(svc = normUuid($("svc").value), chr = normUuid($("chr").value)) {
+  setStatus("busy", "Connecting…");
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(svc);
+  characteristic = await service.getCharacteristic(chr);
+  manualDisconnect = false;
+  setStatus("on", device.name || "Connected");
+  toast("Connected");
+}
+
+async function onDisconnected() {
+  characteristic = null;
+  if (manualDisconnect || !device) { setStatus("off", "Disconnected"); return; }
+  // Try to reconnect a few times (e.g. ESP32 reset or briefly out of range)
+  for (let i = 1; i <= 3; i++) {
+    setStatus("busy", `Reconnecting (${i}/3)…`);
+    try { await new Promise((r) => setTimeout(r, 1000 * i)); await openGatt(); return; } catch {}
+  }
+  setStatus("off", "Disconnected");
+  toast("Lost connection to door");
+}
+
+async function send(text, label = text) {
+  if (!characteristic) { toast("Not connected"); return false; }
+  try {
+    const data = enc.encode(text);
+    const p = characteristic.properties;
+    if (p.write && characteristic.writeValueWithResponse) await characteristic.writeValueWithResponse(data);
+    else if (p.writeWithoutResponse && characteristic.writeValueWithoutResponse) await characteristic.writeValueWithoutResponse(data);
+    else await characteristic.writeValue(data);
+    $("nowText").textContent = label;
+    store.set("now", label);
+    if (navigator.vibrate) navigator.vibrate(15);
+    return true;
+  } catch (e) {
+    toast("Send failed: " + (e.message || e));
+    return false;
+  }
+}
+
+// Presets
+document.querySelectorAll(".preset").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    if (await send(btn.dataset.cmd, btn.dataset.label)) {
+      document.querySelectorAll(".preset").forEach((b) => b.classList.toggle("active", b === btn));
+    }
+  });
+});
+
+// Custom message + recents
+const PRESET_CODES = ["A", "B", "C", "D", "E"];
+function renderRecent() {
+  const list = store.get("recent", []);
+  const box = $("recent"); box.innerHTML = "";
+  if (!list.length) { box.innerHTML = '<span class="hint">Messages you send show up here.</span>'; return; }
+  for (const msg of list) {
+    const c = document.createElement("button");
+    c.className = "chip"; c.textContent = msg; c.disabled = !characteristic;
+    c.addEventListener("click", () => sendCustom(msg));
+    box.appendChild(c);
+  }
+}
+async function sendCustom(msg) {
+  if (PRESET_CODES.includes(msg.toUpperCase()) && msg.length === 1) {
+    if (!confirm(`"${msg}" is a shortcut code on the sign. Send it anyway?`)) return;
+  }
+  if (await send(msg)) {
+    document.querySelectorAll(".preset").forEach((b) => b.classList.remove("active"));
+    const list = [msg, ...store.get("recent", []).filter((m) => m !== msg)].slice(0, 8);
+    store.set("recent", list); renderRecent();
+  }
+}
+$("customForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const msg = $("customInput").value.trim();
+  if (!msg) return;
+  sendCustom(msg).then(() => { $("customInput").value = ""; $("customInput").blur(); });
+});
+
+$("connectBtn").addEventListener("click", () => {
+  if (device && device.gatt.connected) { manualDisconnect = true; device.gatt.disconnect(); }
+  else connect();
+});
+
+// Init
+$("nowText").textContent = store.get("now", "—");
+renderRecent();
+setStatus("off", "Disconnected");
+if (!navigator.bluetooth) {
+  $("unsupported").style.display = "block";
+  $("connectBtn").disabled = true; $("connectBtn").style.opacity = .45;
+}
+</script>
+</body>
+</html>
